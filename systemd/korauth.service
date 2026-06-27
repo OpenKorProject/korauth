@@ -8,24 +8,24 @@ Wants=postgresql.service redis.service
 Type=simple
 User=korauth
 Group=korauth
-WorkingDirectory=/opt/korauth
+WorkingDirectory=/opt/openkor/korauth
 
 # Environment variables
-EnvironmentFile=/etc/korauth/korauth.env
+EnvironmentFile=/opt/openkor/korauth/config/korauth.env
 
 # Security
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/korauth/logs /var/lib/korauth
+ReadWritePaths=/opt/openkor/korauth
 
 # Resource limits
 LimitNOFILE=65535
 LimitNPROC=4096
 
 # Startup
-ExecStart=/opt/korauth/korauth
+ExecStart=/opt/openkor/korauth/bin/korauth
 Restart=on-failure
 RestartSec=10
 

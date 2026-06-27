@@ -242,30 +242,31 @@ sudo bash systemd/install.sh
 
 This script:
 - Creates `korauth` system user & directories
-- Builds and installs the binary to `/opt/korauth`
+- Builds and installs binaries to `/opt/openkor/korauth/bin/`
 - Installs systemd service file
-- Sets up proper file permissions
+- Sets up proper file permissions and ownership
 
 #### Configuration
 
 **1. Generate RSA keys:**
 ```bash
-sudo mkdir -p /etc/korauth/keys
-sudo openssl genrsa -out /etc/korauth/keys/jwt-private.pem 4096
-sudo openssl rsa -in /etc/korauth/keys/jwt-private.pem -pubout -out /etc/korauth/keys/jwt-public.pem
-sudo chown korauth:korauth /etc/korauth/keys/*.pem
-sudo chmod 600 /etc/korauth/keys/*.pem
+sudo openssl genrsa -out /opt/openkor/korauth/config/keys/jwt-private.pem 4096
+sudo openssl rsa -in /opt/openkor/korauth/config/keys/jwt-private.pem -pubout -out /opt/openkor/korauth/config/keys/jwt-public.pem
+sudo chown korauth:korauth /opt/openkor/korauth/config/keys/*.pem
+sudo chmod 600 /opt/openkor/korauth/config/keys/*.pem
 ```
 
 **2. Configure environment:**
 ```bash
-sudo nano /etc/korauth/korauth.env
+sudo nano /opt/openkor/korauth/config/korauth.env
 ```
 
 Edit the following variables:
 ```bash
 DATABASE_URL=postgres://user:password@localhost:5432/openkor?sslmode=require
 REDIS_URL=redis://localhost:6379/0
+JWT_PRIVATE_KEY_PATH=/opt/openkor/korauth/config/keys/jwt-private.pem
+JWT_PUBLIC_KEY_PATH=/opt/openkor/korauth/config/keys/jwt-public.pem
 SEED_ADMIN_PASSWORD=<strong-password>
 ```
 
@@ -308,12 +309,11 @@ sudo journalctl -u korauth -n 100
 
 | Path | Owner | Permissions | Purpose |
 |------|-------|-------------|---------|
-| `/opt/korauth/` | korauth:korauth | 755 | Binary location |
-| `/etc/korauth/` | root:root | 755 | Configuration |
-| `/etc/korauth/korauth.env` | root:root | 600 | Environment variables |
-| `/etc/korauth/keys/` | korauth:korauth | 700 | RSA keys |
-| `/var/lib/korauth/` | korauth:korauth | 755 | Runtime data |
-| `/var/log/korauth/` | korauth:korauth | 755 | Logs (via journald) |
+| `/opt/openkor/korauth/` | korauth:korauth | 755 | Base installation directory |
+| `/opt/openkor/korauth/bin/` | korauth:korauth | 755 | Binaries (korauth, korauth-cli) |
+| `/opt/openkor/korauth/config/` | korauth:korauth | 755 | Configuration files |
+| `/opt/openkor/korauth/config/korauth.env` | korauth:korauth | 600 | Environment variables |
+| `/opt/openkor/korauth/config/keys/` | korauth:korauth | 700 | RSA keys |
 
 ### Production Checklist
 
@@ -337,10 +337,10 @@ Use the `korauth-cli` admin utility to reset the password:
 docker compose exec korauth /app/korauth-cli reset-admin-password <tenant-id> <new-password>
 
 # Systemd
-/opt/korauth/korauth-cli reset-admin-password <tenant-id> <new-password>
+/opt/openkor/korauth/bin/korauth-cli reset-admin-password <tenant-id> <new-password>
 
 # Example
-/opt/korauth/korauth-cli reset-admin-password 6ec83570-ee9d-46b1-8a8c-f52a01ce987d NewPassword123!
+/opt/openkor/korauth/bin/korauth-cli reset-admin-password 6ec83570-ee9d-46b1-8a8c-f52a01ce987d NewPassword123!
 ```
 
 **Note:** Password must meet policy requirements:

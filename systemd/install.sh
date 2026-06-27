@@ -12,24 +12,21 @@ fi
 echo "Installing korauth with systemd..."
 
 # Directories
-INSTALL_DIR="/opt/korauth"
-CONFIG_DIR="/etc/korauth"
-KEYS_DIR="/etc/korauth/keys"
-LOG_DIR="/var/log/korauth"
-LIB_DIR="/var/lib/korauth"
+BASE_DIR="/opt/openkor/korauth"
+BIN_DIR="$BASE_DIR/bin"
+CONFIG_DIR="$BASE_DIR/config"
+KEYS_DIR="$CONFIG_DIR/keys"
 
 # Create directories
 echo "Creating directories..."
-mkdir -p "$INSTALL_DIR"
+mkdir -p "$BIN_DIR"
 mkdir -p "$CONFIG_DIR"
 mkdir -p "$KEYS_DIR"
-mkdir -p "$LOG_DIR"
-mkdir -p "$LIB_DIR"
 
 # Create korauth user if it doesn't exist
 if ! id "korauth" &>/dev/null; then
     echo "Creating korauth system user..."
-    useradd --system --home /var/lib/korauth --shell /bin/false korauth
+    useradd --system --home "$BASE_DIR" --shell /bin/false korauth
 fi
 
 # Build binaries
@@ -38,9 +35,9 @@ go build -o korauth ./cmd/korauth
 go build -o korauth-cli ./cmd/korauth-cli
 
 # Install binaries
-echo "Installing binaries to $INSTALL_DIR..."
-install -o korauth -g korauth -m 0755 korauth "$INSTALL_DIR/"
-install -o root -g root -m 0755 korauth-cli "$INSTALL_DIR/"
+echo "Installing binaries to $BIN_DIR..."
+install -o korauth -g korauth -m 0755 korauth "$BIN_DIR/"
+install -o root -g root -m 0755 korauth-cli "$BIN_DIR/"
 rm korauth korauth-cli
 
 # Install systemd service
@@ -50,26 +47,19 @@ install -o root -g root -m 0644 systemd/korauth.service /etc/systemd/system/
 # Copy environment template
 echo "Creating environment file template..."
 if [[ ! -f "$CONFIG_DIR/korauth.env" ]]; then
-    install -o root -g root -m 0600 systemd/korauth.env.example "$CONFIG_DIR/korauth.env"
+    install -o korauth -g korauth -m 0600 systemd/korauth.env.example "$CONFIG_DIR/korauth.env"
     echo "⚠️  Please edit: $CONFIG_DIR/korauth.env"
 else
     echo "ℹ️  $CONFIG_DIR/korauth.env already exists (skipped)"
 fi
 
-# Set up keys directory
-echo "Setting up keys directory..."
-chown -R korauth:korauth "$KEYS_DIR"
+# Set up directory permissions
+echo "Setting up directory permissions..."
+chown -R korauth:korauth "$BASE_DIR"
+chmod 755 "$BASE_DIR"
+chmod 755 "$BIN_DIR"
+chmod 755 "$CONFIG_DIR"
 chmod 700 "$KEYS_DIR"
-
-# Set up logs directory
-echo "Setting up logs directory..."
-chown -R korauth:korauth "$LOG_DIR"
-chmod 755 "$LOG_DIR"
-
-# Set up lib directory
-echo "Setting up library directory..."
-chown -R korauth:korauth "$LIB_DIR"
-chmod 755 "$LIB_DIR"
 
 # Reload systemd daemon
 echo "Reloading systemd daemon..."
@@ -80,7 +70,6 @@ echo "✓ Installation complete!"
 echo ""
 echo "Next steps:"
 echo "1. Generate RSA keys:"
-echo "   sudo mkdir -p $KEYS_DIR"
 echo "   sudo openssl genrsa -out $KEYS_DIR/jwt-private.pem 4096"
 echo "   sudo openssl rsa -in $KEYS_DIR/jwt-private.pem -pubout -out $KEYS_DIR/jwt-public.pem"
 echo "   sudo chown korauth:korauth $KEYS_DIR/*.pem"
@@ -99,4 +88,8 @@ echo ""
 echo "5. Check status:"
 echo "   sudo systemctl status korauth"
 echo "   sudo journalctl -u korauth -f  # View logs"
+echo ""
+echo "Admin utilities:"
+echo "   Reset admin password:"
+echo "   $BIN_DIR/korauth-cli reset-admin-password <tenant-id> <new-password>"
 echo ""
