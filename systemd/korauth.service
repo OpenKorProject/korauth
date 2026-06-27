@@ -1,0 +1,38 @@
+[Unit]
+Description=korauth - OpenKor Identity & Access Management Service
+Documentation=https://github.com/OpenKorProject/korauth
+After=network.target postgresql.service redis.service
+Wants=postgresql.service redis.service
+
+[Service]
+Type=simple
+User=korauth
+Group=korauth
+WorkingDirectory=/opt/korauth
+
+# Environment variables
+EnvironmentFile=/etc/korauth/korauth.env
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/korauth/logs /var/lib/korauth
+
+# Resource limits
+LimitNOFILE=65535
+LimitNPROC=4096
+
+# Startup
+ExecStart=/opt/korauth/korauth
+Restart=on-failure
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=korauth
+
+[Install]
+WantedBy=multi-user.target

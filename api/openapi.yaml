@@ -1,0 +1,893 @@
+openapi: "3.1.0"
+
+info:
+  title: korauth — OpenKor Identity / IAM Service
+  version: "1.0.0"
+  description: |
+    JWT (RS256) based authentication and access management.
+    All requests come through the `korapi` gateway; this service is not directly exposed.
+
+servers:
+  - url: http://localhost:8081
+    description: Development
+
+tags:
+  - name: auth
+    description: Authentication (login / refresh / logout)
+  - name: jwks
+    description: Public key publishing
+  - name: users
+    description: User management (admin)
+  - name: tenants
+    description: Tenant management (admin)
+  - name: roles
+    description: Role definitions and assignment (admin)
+
+# ---------------------------------------------------------------------------
+# Security scheme
+# ---------------------------------------------------------------------------
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: "RS256 signed JWT access token. Header - Authorization: Bearer <token>"
+
+  # -------------------------------------------------------------------------
+  # Reusable schemas
+  # -------------------------------------------------------------------------
+  schemas:
+
+    # --- Common structures -------------------------------------------------------
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, request_id]
+          properties:
+            code:
+              type: string
+              description: Machine-readable, SCREAMING_SNAKE_CASE
+              example: USER_NOT_FOUND
+            message:
+              type: string
+              example: "User not found"
+            details:
+              type: object
+              additionalProperties: true
+              nullable: true
+            request_id:
+              type: string
+              format: uuid
+
+    Pagination:
+      type: object
+      required: [page, per_page, total]
+      properties:
+        page:
+          type: integer
+          minimum: 1
+          example: 1
+        per_page:
+          type: integer
+          minimum: 1
+          maximum: 100
+          example: 50
+        total:
+          type: integer
+          description: Total number of records
+          example: 123
+
+    # --- Authentication ---------------------------------------------------
+
+    LoginRequest:
+      type: object
+      required: [username, password, tenant_id]
+      properties:
+        username:
+          type: string
+          minLength: 1
+          maxLength: 64
+          example: alice
+        password:
+          type: string
+          format: password
+          minLength: 8
+          example: "S3cr3t!pw"
+        tenant_id:
+          type: string
+          format: uuid
+          example: "7f3d1c00-0000-0000-0000-000000000001"
+
+    TokenPair:
+      type: object
+      required: [access_token, refresh_token, token_type, expires_in]
+      properties:
+        access_token:
+          type: string
+          description: RS256 signed JWT (valid for 15 minutes)
+        refresh_token:
+          type: string
+          description: Opaque random string (valid for 7 days)
+        token_type:
+          type: string
+          enum: [Bearer]
+        expires_in:
+          type: integer
+          description: Access token lifetime in seconds
+          example: 900
+
+    RefreshRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token:
+          type: string
+
+    LogoutRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token:
+          type: string
+
+    # --- User ----------------------------------------------------------
+
+    UserBase:
+      type: object
+      required: [username, tenant_id]
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 64
+          example: alice
+        first_name:
+          type: string
+          nullable: true
+          maxLength: 128
+          example: Alice
+        last_name:
+          type: string
+          nullable: true
+          maxLength: 128
+          example: Smith
+        email:
+          type: string
+          nullable: true
+          format: email
+          example: alice@example.com
+        tenant_id:
+          type: string
+          format: uuid
+          example: "7f3d1c00-0000-0000-0000-000000000001"
+
+    UserResponse:
+      allOf:
+        - $ref: "#/components/schemas/UserBase"
+        - type: object
+          required: [id, created_at, updated_at, roles]
+          properties:
+            id:
+              type: string
+              format: uuid
+            roles:
+              type: array
+              items:
+                $ref: "#/components/schemas/RoleName"
+              minItems: 1
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+
+    CreateUserRequest:
+      allOf:
+        - $ref: "#/components/schemas/UserBase"
+        - type: object
+          required: [password, roles]
+          properties:
+            password:
+              type: string
+              format: password
+              minLength: 8
+              description: Hashed with argon2id; this value is never stored
+            roles:
+              type: array
+              items:
+                $ref: "#/components/schemas/RoleName"
+              minItems: 1
+
+    UpdateUserRequest:
+      type: object
+      minProperties: 1
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 64
+        first_name:
+          type: string
+          maxLength: 128
+        last_name:
+          type: string
+          maxLength: 128
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+          minLength: 8
+
+    UserListResponse:
+      type: object
+      required: [data, pagination]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/UserResponse"
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+
+    # --- Tenant -------------------------------------------------------------
+
+    TenantResponse:
+      type: object
+      required: [id, name, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          minLength: 1
+          maxLength: 128
+          example: "acme-corp"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateTenantRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 128
+          example: "acme-corp"
+
+    TenantListResponse:
+      type: object
+      required: [data, pagination]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/TenantResponse"
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+
+    # --- Role ----------------------------------------------------------------
+
+    RoleName:
+      type: string
+      enum: [admin, operator, viewer]
+
+    RoleResponse:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: integer
+          example: 1
+        name:
+          $ref: "#/components/schemas/RoleName"
+
+    AssignRolesRequest:
+      type: object
+      required: [roles]
+      properties:
+        roles:
+          type: array
+          items:
+            $ref: "#/components/schemas/RoleName"
+          minItems: 1
+          description: |
+            Roles to assign to the user. In MVP, single element expected.
+            Existing roles are **replaced** (PUT semantics).
+
+  # -------------------------------------------------------------------------
+  # Reusable response templates
+  # -------------------------------------------------------------------------
+  responses:
+    Unauthorized:
+      description: Token missing or invalid
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: UNAUTHORIZED
+              message: "Missing or invalid token"
+              request_id: "550e8400-e29b-41d4-a716-446655440000"
+
+    Forbidden:
+      description: Insufficient permissions
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: FORBIDDEN
+              message: "Insufficient permissions"
+              request_id: "550e8400-e29b-41d4-a716-446655440000"
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    ValidationError:
+      description: Invalid request body
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    InternalError:
+      description: Unexpected server error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+paths:
+
+  # =========================================================================
+  # Authentication
+  # =========================================================================
+
+  /v1/auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: Login with username / password
+      description: |
+        On successful login, returns RS256 signed access token + opaque refresh token.
+        Brute-force protection: after 5 failed logins for the same `tenant_id + username`
+        within 15 minutes, the account is locked for 15 minutes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenPair"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          description: Invalid username or password
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error:
+                  code: INVALID_CREDENTIALS
+                  message: "Invalid username or password"
+                  request_id: "550e8400-e29b-41d4-a716-446655440000"
+        "423":
+          description: Account locked (brute-force)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error:
+                  code: ACCOUNT_LOCKED
+                  message: "Too many failed attempts. Try again in 15 minutes."
+                  details:
+                    retry_after_seconds: 900
+                  request_id: "550e8400-e29b-41d4-a716-446655440000"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/auth/refresh:
+    post:
+      operationId: refreshToken
+      tags: [auth]
+      summary: Get new access token with refresh token
+      description: |
+        Token rotation is applied: the used refresh token is invalidated,
+        and a new access token is returned along with a new refresh token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshRequest"
+      responses:
+        "200":
+          description: New token pair
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenPair"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          description: Refresh token invalid or expired
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error:
+                  code: INVALID_REFRESH_TOKEN
+                  message: "Refresh token is invalid or expired"
+                  request_id: "550e8400-e29b-41d4-a716-446655440000"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/auth/logout:
+    post:
+      operationId: logout
+      tags: [auth]
+      summary: Revoke refresh token
+      description: |
+        The provided refresh token is deleted from Redis; it can no longer be used.
+        Access token is short-lived, so no additional action is needed.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LogoutRequest"
+      responses:
+        "204":
+          description: Success (no content)
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # =========================================================================
+  # JWKS
+  # =========================================================================
+
+  /v1/auth/.well-known/jwks.json:
+    get:
+      operationId: getJwks
+      tags: [jwks]
+      summary: Active public key set
+      description: |
+        Other services use this endpoint to verify tokens.
+        May contain multiple keys during key rotation.
+        Can be cached with `Cache-Control: public, max-age=3600`.
+      responses:
+        "200":
+          description: JWK Set
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                example: "public, max-age=3600"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [keys]
+                properties:
+                  keys:
+                    type: array
+                    items:
+                      type: object
+                      required: [kty, use, alg, kid, n, e]
+                      properties:
+                        kty:
+                          type: string
+                          enum: [RSA]
+                        use:
+                          type: string
+                          enum: [sig]
+                        alg:
+                          type: string
+                          enum: [RS256]
+                        kid:
+                          type: string
+                          description: First 16 hex characters of the public key SHA-256 fingerprint
+                          example: "a3f8c2d1e0b94f7a"
+                        n:
+                          type: string
+                          description: Base64url-encoded RSA modulus
+                        e:
+                          type: string
+                          description: Base64url-encoded RSA public exponent
+                          example: "AQAB"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # =========================================================================
+  # Current user
+  # =========================================================================
+
+  /v1/auth/me:
+    get:
+      operationId: getMe
+      tags: [users]
+      summary: Get current user information from token
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: User information
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # =========================================================================
+  # User management
+  # =========================================================================
+
+  /v1/auth/users:
+    get:
+      operationId: listUsers
+      tags: [users]
+      summary: List users
+      description: Only `admin` role can access. Tenant-scoped listing.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: per_page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: tenant_id
+          in: query
+          description: Tenant to filter by (defaults to tenant from token)
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: User list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    post:
+      operationId: createUser
+      tags: [users]
+      summary: Create new user
+      description: Only `admin` role can access.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUserRequest"
+      responses:
+        "201":
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: Username already exists in this tenant
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error:
+                  code: USERNAME_TAKEN
+                  message: "Username already exists in this tenant"
+                  request_id: "550e8400-e29b-41d4-a716-446655440000"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/auth/users/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    get:
+      operationId: getUser
+      tags: [users]
+      summary: Get user details
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: User information
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    patch:
+      operationId: updateUser
+      tags: [users]
+      summary: Update user (partial)
+      description: Only `admin` role can access. Only `username` and `password` can be updated.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateUserRequest"
+      responses:
+        "200":
+          description: Updated user information
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Username conflict
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    delete:
+      operationId: deleteUser
+      tags: [users]
+      summary: Delete user with soft-delete
+      description: |
+        Only `admin` role can access.
+        The `deleted_at` field is set; the record is not physically deleted.
+        Active refresh tokens of the deleted user are cleaned from Redis.
+      security:
+        - bearerAuth: []
+      responses:
+        "204":
+          description: Deleted (no content)
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # =========================================================================
+  # Role assignment (per user)
+  # =========================================================================
+
+  /v1/auth/users/{id}/roles:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    put:
+      operationId: assignRoles
+      tags: [roles]
+      summary: Assign roles to user (replaces existing roles)
+      description: |
+        Only `admin` role can access.
+        PUT semantics: the provided `roles` array **replaces** all of the user's roles.
+        Forbidden to remove own role (403).
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssignRolesRequest"
+      responses:
+        "200":
+          description: Updated user information (with role list)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # =========================================================================
+  # Role definitions (seed list)
+  # =========================================================================
+
+  /v1/auth/roles:
+    get:
+      operationId: listRoles
+      tags: [roles]
+      summary: List valid role definitions
+      description: Fixed role list in the system (admin / operator / viewer).
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Role list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RoleResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # =========================================================================
+  # Tenant management
+  # =========================================================================
+
+  /v1/auth/tenants:
+    get:
+      operationId: listTenants
+      tags: [tenants]
+      summary: List tenants
+      description: Only `admin` role can access.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: per_page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+      responses:
+        "200":
+          description: Tenant list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    post:
+      operationId: createTenant
+      tags: [tenants]
+      summary: Create new tenant
+      description: Only `admin` role can access.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTenantRequest"
+      responses:
+        "201":
+          description: Tenant created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: Tenant with this name already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error:
+                  code: TENANT_NAME_TAKEN
+                  message: "A tenant with this name already exists"
+                  request_id: "550e8400-e29b-41d4-a716-446655440000"
+        "500":
+          $ref: "#/components/responses/InternalError"

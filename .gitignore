@@ -1,0 +1,75 @@
+# Binaries
+/korauth
+/korauth-cli
+*.exe
+*.exe~
+*.dll
+*.so
+*.so.*
+*.dylib
+
+# Test binaries, build with: go test -c
+*.test
+
+# Test coverage
+*.out
+coverage.html
+*.coverprofile
+
+# Go workspace file
+go.work
+
+# IDE & Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.project
+.classpath
+.c9/
+*.jmx
+*.sublime-workspace
+
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Secrets & Keys
+keys/
+/keys/
+!keys/.gitkeep
+
+# Database
+*.sqlite
+*.sqlite3
+*.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Build artifacts
+bin/
+dist/
+build/
+
+# Dependency management
+vendor/
+go.sum
+
+# Docker
+.docker/
+.dockerignore
+docker-compose.override.yml
+
+# Git
+.gitkeep

@@ -1,0 +1,869 @@
+openapi: "3.1.0"
+
+info:
+  title: korauth — OpenKor Kimlik / IAM Servisi
+  version: "1.0.0"
+  description: |
+    JWT (RS256) tabanlı kimlik doğrulama ve erişim yönetimi.
+    Tüm istekler `korapi` gateway üzerinden gelir; bu servis doğrudan dışarıya açılmaz.
+
+servers:
+  - url: http://localhost:8081
+    description: Geliştirme
+
+tags:
+  - name: auth
+    description: Kimlik doğrulama (login / refresh / logout)
+  - name: jwks
+    description: Public key yayınlama
+  - name: users
+    description: Kullanıcı yönetimi (admin)
+  - name: tenants
+    description: Tenant yönetimi (admin)
+  - name: roles
+    description: Rol tanımları ve atama (admin)
+
+# ---------------------------------------------------------------------------
+# Güvenlik şeması
+# ---------------------------------------------------------------------------
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: RS256 imzalı JWT access token. Header — `Authorization: Bearer <token>`
+
+  # -------------------------------------------------------------------------
+  # Yeniden kullanılan şemalar
+  # -------------------------------------------------------------------------
+  schemas:
+
+    # --- Ortak yapılar -------------------------------------------------------
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, request_id]
+          properties:
+            code:
+              type: string
+              description: Makine-okunur, SCREAMING_SNAKE_CASE
+              example: USER_NOT_FOUND
+            message:
+              type: string
+              example: "User not found"
+            details:
+              type: object
+              additionalProperties: true
+              nullable: true
+            request_id:
+              type: string
+              format: uuid
+
+    Pagination:
+      type: object
+      required: [page, per_page, total]
+      properties:
+        page:
+          type: integer
+          minimum: 1
+          example: 1
+        per_page:
+          type: integer
+          minimum: 1
+          maximum: 100
+          example: 50
+        total:
+          type: integer
+          description: Toplam kayıt sayısı
+          example: 123
+
+    # --- Kimlik doğrulama ---------------------------------------------------
+
+    LoginRequest:
+      type: object
+      required: [username, password, tenant_id]
+      properties:
+        username:
+          type: string
+          minLength: 1
+          maxLength: 64
+          example: alice
+        password:
+          type: string
+          format: password
+          minLength: 8
+          example: "S3cr3t!pw"
+        tenant_id:
+          type: string
+          format: uuid
+          example: "7f3d1c00-0000-0000-0000-000000000001"
+
+    TokenPair:
+      type: object
+      required: [access_token, refresh_token, token_type, expires_in]
+      properties:
+        access_token:
+          type: string
+          description: RS256 imzalı JWT (15 dakika geçerli)
+        refresh_token:
+          type: string
+          description: Opak random string (7 gün geçerli)
+        token_type:
+          type: string
+          enum: [Bearer]
+        expires_in:
+          type: integer
+          description: Access token saniye cinsinden ömrü
+          example: 900
+
+    RefreshRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token:
+          type: string
+
+    LogoutRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token:
+          type: string
+
+    # --- Kullanıcı ----------------------------------------------------------
+
+    UserBase:
+      type: object
+      required: [username, tenant_id]
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 64
+          example: alice
+        tenant_id:
+          type: string
+          format: uuid
+          example: "7f3d1c00-0000-0000-0000-000000000001"
+
+    UserResponse:
+      allOf:
+        - $ref: "#/components/schemas/UserBase"
+        - type: object
+          required: [id, created_at, updated_at, roles]
+          properties:
+            id:
+              type: string
+              format: uuid
+            roles:
+              type: array
+              items:
+                $ref: "#/components/schemas/RoleName"
+              minItems: 1
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+
+    CreateUserRequest:
+      allOf:
+        - $ref: "#/components/schemas/UserBase"
+        - type: object
+          required: [password, roles]
+          properties:
+            password:
+              type: string
+              format: password
+              minLength: 8
+              description: argon2id ile hash'lenir; bu değer asla saklanmaz
+            roles:
+              type: array
+              items:
+                $ref: "#/components/schemas/RoleName"
+              minItems: 1
+
+    UpdateUserRequest:
+      type: object
+      minProperties: 1
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 64
+        password:
+          type: string
+          format: password
+          minLength: 8
+
+    UserListResponse:
+      type: object
+      required: [data, pagination]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/UserResponse"
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+
+    # --- Tenant -------------------------------------------------------------
+
+    TenantResponse:
+      type: object
+      required: [id, name, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          minLength: 1
+          maxLength: 128
+          example: "acme-corp"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateTenantRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 128
+          example: "acme-corp"
+
+    TenantListResponse:
+      type: object
+      required: [data, pagination]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/TenantResponse"
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+
+    # --- Rol ----------------------------------------------------------------
+
+    RoleName:
+      type: string
+      enum: [admin, operator, viewer]
+
+    RoleResponse:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: integer
+          example: 1
+        name:
+          $ref: "#/components/schemas/RoleName"
+
+    AssignRolesRequest:
+      type: object
+      required: [roles]
+      properties:
+        roles:
+          type: array
+          items:
+            $ref: "#/components/schemas/RoleName"
+          minItems: 1
+          description: |
+            Kullanıcıya atanacak roller. MVP'de tek eleman beklenir.
+            Mevcut roller **değiştirilir** (PUT semantiği).
+
+  # -------------------------------------------------------------------------
+  # Yeniden kullanılan yanıt şablonları
+  # -------------------------------------------------------------------------
+  responses:
+    Unauthorized:
+      description: Token eksik veya geçersiz
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: UNAUTHORIZED
+              message: "Missing or invalid token"
+              request_id: "550e8400-e29b-41d4-a716-446655440000"
+
+    Forbidden:
+      description: Yetki yetersiz
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: FORBIDDEN
+              message: "Insufficient permissions"
+              request_id: "550e8400-e29b-41d4-a716-446655440000"
+
+    NotFound:
+      description: Kaynak bulunamadı
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    ValidationError:
+      description: Geçersiz istek gövdesi
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    InternalError:
+      description: Beklenmeyen sunucu hatası
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+paths:
+
+  # =========================================================================
+  # Kimlik doğrulama
+  # =========================================================================
+
+  /v1/auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: Kullanıcı adı / parola ile giriş
+      description: |
+        Başarılı girişte RS256 imzalı access token + opak refresh token döner.
+        Brute-force koruması: aynı `tenant_id + username` için 15 dakikada 5
+        başarısız girişten sonra hesap 15 dakika kilitlenir.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Giriş başarılı
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenPair"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          description: Kullanıcı adı veya parola yanlış
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error:
+                  code: INVALID_CREDENTIALS
+                  message: "Invalid username or password"
+                  request_id: "550e8400-e29b-41d4-a716-446655440000"
+        "423":
+          description: Hesap kilitli (brute-force)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error:
+                  code: ACCOUNT_LOCKED
+                  message: "Too many failed attempts. Try again in 15 minutes."
+                  details:
+                    retry_after_seconds: 900
+                  request_id: "550e8400-e29b-41d4-a716-446655440000"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/auth/refresh:
+    post:
+      operationId: refreshToken
+      tags: [auth]
+      summary: Refresh token ile yeni access token al
+      description: |
+        Token rotation uygulanır: kullanılan refresh token geçersiz kılınır,
+        yeni bir refresh token ile birlikte yeni access token döner.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshRequest"
+      responses:
+        "200":
+          description: Yeni token çifti
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenPair"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          description: Refresh token geçersiz veya süresi dolmuş
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error:
+                  code: INVALID_REFRESH_TOKEN
+                  message: "Refresh token is invalid or expired"
+                  request_id: "550e8400-e29b-41d4-a716-446655440000"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/auth/logout:
+    post:
+      operationId: logout
+      tags: [auth]
+      summary: Refresh token'ı revoke et
+      description: |
+        Gönderilen refresh token Redis'ten silinir; artık kullanılamaz.
+        Access token kısa ömürlü olduğundan ek işlem gerekmez.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LogoutRequest"
+      responses:
+        "204":
+          description: Başarılı (içerik yok)
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # =========================================================================
+  # JWKS
+  # =========================================================================
+
+  /v1/auth/.well-known/jwks.json:
+    get:
+      operationId: getJwks
+      tags: [jwks]
+      summary: Aktif public key seti
+      description: |
+        Diğer servisler token doğrulamak için bu endpoint'i kullanır.
+        Key rotation sırasında birden fazla key içerebilir.
+        `Cache-Control: public, max-age=3600` ile önbelleklenebilir.
+      responses:
+        "200":
+          description: JWK Set
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                example: "public, max-age=3600"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [keys]
+                properties:
+                  keys:
+                    type: array
+                    items:
+                      type: object
+                      required: [kty, use, alg, kid, n, e]
+                      properties:
+                        kty:
+                          type: string
+                          enum: [RSA]
+                        use:
+                          type: string
+                          enum: [sig]
+                        alg:
+                          type: string
+                          enum: [RS256]
+                        kid:
+                          type: string
+                          description: Public key SHA-256 parmak izinin ilk 16 hex karakteri
+                          example: "a3f8c2d1e0b94f7a"
+                        n:
+                          type: string
+                          description: Base64url-encoded RSA modulus
+                        e:
+                          type: string
+                          description: Base64url-encoded RSA public exponent
+                          example: "AQAB"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # =========================================================================
+  # Mevcut kullanıcı
+  # =========================================================================
+
+  /v1/auth/me:
+    get:
+      operationId: getMe
+      tags: [users]
+      summary: Token'daki kullanıcının bilgilerini getir
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Kullanıcı bilgisi
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # =========================================================================
+  # Kullanıcı yönetimi
+  # =========================================================================
+
+  /v1/auth/users:
+    get:
+      operationId: listUsers
+      tags: [users]
+      summary: Kullanıcıları listele
+      description: Yalnız `admin` rolü erişebilir. Tenant kapsamlı listeleme.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: per_page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: tenant_id
+          in: query
+          description: Filtrelenecek tenant (belirtilmezse token'daki tenant)
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Kullanıcı listesi
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    post:
+      operationId: createUser
+      tags: [users]
+      summary: Yeni kullanıcı oluştur
+      description: Yalnız `admin` rolü erişebilir.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUserRequest"
+      responses:
+        "201":
+          description: Kullanıcı oluşturuldu
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: Aynı tenant'ta bu kullanıcı adı zaten mevcut
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error:
+                  code: USERNAME_TAKEN
+                  message: "Username already exists in this tenant"
+                  request_id: "550e8400-e29b-41d4-a716-446655440000"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/auth/users/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    get:
+      operationId: getUser
+      tags: [users]
+      summary: Kullanıcı detayı
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Kullanıcı bilgisi
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    patch:
+      operationId: updateUser
+      tags: [users]
+      summary: Kullanıcıyı güncelle (kısmi)
+      description: Yalnız `admin` rolü erişebilir. Yalnız `username` ve `password` güncellenebilir.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateUserRequest"
+      responses:
+        "200":
+          description: Güncel kullanıcı bilgisi
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Kullanıcı adı çakışması
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    delete:
+      operationId: deleteUser
+      tags: [users]
+      summary: Kullanıcıyı soft-delete ile sil
+      description: |
+        Yalnız `admin` rolü erişebilir.
+        `deleted_at` alanı set edilir; kayıt fiziksel olarak silinmez.
+        Silinen kullanıcının aktif refresh token'ları Redis'ten temizlenir.
+      security:
+        - bearerAuth: []
+      responses:
+        "204":
+          description: Silindi (içerik yok)
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # =========================================================================
+  # Rol atama (kullanıcı bazlı)
+  # =========================================================================
+
+  /v1/auth/users/{id}/roles:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    put:
+      operationId: assignRoles
+      tags: [roles]
+      summary: Kullanıcıya rol ata (mevcut rolleri değiştirir)
+      description: |
+        Yalnız `admin` rolü erişebilir.
+        PUT semantiği: gönderilen `roles` dizisi kullanıcının tüm rollerini **değiştirir**.
+        Kendi rolünü kaldırmak yasak (403).
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssignRolesRequest"
+      responses:
+        "200":
+          description: Güncel kullanıcı bilgisi (rol listesiyle)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # =========================================================================
+  # Rol tanımları (seed listesi)
+  # =========================================================================
+
+  /v1/auth/roles:
+    get:
+      operationId: listRoles
+      tags: [roles]
+      summary: Geçerli rol tanımlarını listele
+      description: Sistemdeki sabit rol listesi (admin / operator / viewer).
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Rol listesi
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RoleResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # =========================================================================
+  # Tenant yönetimi
+  # =========================================================================
+
+  /v1/auth/tenants:
+    get:
+      operationId: listTenants
+      tags: [tenants]
+      summary: Tenant'ları listele
+      description: Yalnız `admin` rolü erişebilir.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: per_page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+      responses:
+        "200":
+          description: Tenant listesi
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    post:
+      operationId: createTenant
+      tags: [tenants]
+      summary: Yeni tenant oluştur
+      description: Yalnız `admin` rolü erişebilir.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTenantRequest"
+      responses:
+        "201":
+          description: Tenant oluşturuldu
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: Bu isimde tenant zaten mevcut
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error:
+                  code: TENANT_NAME_TAKEN
+                  message: "A tenant with this name already exists"
+                  request_id: "550e8400-e29b-41d4-a716-446655440000"
+        "500":
+          $ref: "#/components/responses/InternalError"
